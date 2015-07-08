@@ -61,7 +61,7 @@ class WeimingBookCrawler
         ).each do |row|
           datas = row.xpath('td')
 
-          edition = datas[1] && datas[1].text.to_i
+          edition = datas[2] && datas[2].text.to_i
           edition = nil if edition == 0
 
           url = URI.join(@query_url, datas[0] && datas[0].xpath('a/@href').to_s).to_s
@@ -73,7 +73,7 @@ class WeimingBookCrawler
             name: datas[0] && datas[0].text,
             author: datas[1] && datas[1].text.strippp,
             edition: edition,
-            # internal_code: internal_code,
+            year: datas[3] && datas[3].text.to_i,
             url: url,
             price: price,
           }
@@ -84,6 +84,44 @@ class WeimingBookCrawler
     end
 
     ThreadsWait.all_waits(*@threads)
+
+    detail_finish_count = 0
+    books_count = @books.keys.count
+
+    # crawl isbn, blah blah blah...
+    @threads = []
+    @books.each_with_index do |(id, book), i|
+      sleep(1) until (
+        @threads.delete_if { |t| !t.status };  # remove dead (ended) threads
+        @threads.count < (ENV['MAX_THREADS'] || 30)
+      )
+      @threads << Thread.new do
+        r = RestClient.get book[:url]
+        doc = Nokogiri::HTML(r)
+
+        img_url = doc.xpath('//img[contains(@src, "upload/bookimg")]/@src').to_s
+        external_image_url = URI.join(@query_url, img_url).to_s
+
+        rows_selector = '//table[@width="516"][@border="0"][@cellpadding="0"][@cellspacing="0"][@align="center"]/tr'
+        rows_data = doc.xpath(rows_selector).map{|row| row.text.strip}
+
+        internal_code_row = rows_data.find{|d| d.match(/(?<=書號[：:]).+/)}
+        internal_code = internal_code_row && internal_code_row.match(/(?<=書號[：:]).+/).to_s
+
+        isbn_row = rows_data.find{|d| d.match(/ISBN[：:]/)}
+        isbn = isbn_row && isbn_row.match(/(?<=ISBN[：:]).+/).to_s
+
+        publisher_row = rows_data.find{|d| d.match(/出版商[：:].+/)}
+        publisher = publisher_row && publisher_row.match(/(?<=出版商[：:]).+/).to_s
+
+        book[:internal_code] = internal_code
+        book[:isbn] = isbn
+        book[:publisher] = publisher
+
+        detail_finish_count += 1
+        print "#{detail_finish_count} / #{books_count}\n"
+      end # end Thread do
+    end
 
     @books.values
   end
