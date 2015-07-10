@@ -2,6 +2,7 @@ require 'crawler_rocks'
 
 require 'json'
 require 'iconv'
+require 'isbn'
 
 require 'pry'
 
@@ -93,7 +94,7 @@ class WeimingBookCrawler
     @books.each_with_index do |(id, book), i|
       sleep(1) until (
         @threads.delete_if { |t| !t.status };  # remove dead (ended) threads
-        @threads.count < (ENV['MAX_THREADS'] || 30)
+        @threads.count < (ENV['MAX_THREADS'] || 20)
       )
       @threads << Thread.new do
         r = RestClient.get book[:url]
@@ -115,13 +116,14 @@ class WeimingBookCrawler
         publisher = publisher_row && publisher_row.match(/(?<=出版商[：:]).+/).to_s
 
         book[:internal_code] = internal_code
-        book[:isbn] = isbn
         book[:publisher] = publisher
+        book[:isbn] = isbn && !isbn.empty? && isbn_to_13(isbn)
 
         detail_finish_count += 1
         print "#{detail_finish_count} / #{books_count}\n"
       end # end Thread do
     end
+    ThreadsWait.all_waits(*@threads)
 
     @books.values
   end
@@ -133,6 +135,37 @@ class WeimingBookCrawler
       }.map{|k, v| "#{k}=#{v}"}.join('&'),
         cookies: @cookies
       )
+  end
+
+  def isbn_to_13 isbn
+    case isbn.length
+    when 13
+      return ISBN.thirteen isbn
+    when 10
+      return ISBN.thirteen isbn
+    when 12
+      return "#{isbn}#{isbn_checksum(isbn)}"
+    when 9
+      return ISBN.thirteen("#{isbn}#{isbn_checksum(isbn)}")
+    end
+  end
+
+  def isbn_checksum(isbn)
+    isbn.gsub!(/[^(\d|X)]/, '')
+    c = 0
+    if isbn.length <= 10
+      10.downto(2) {|i| c += isbn[10-i].to_i * i}
+      c %= 11
+      c = 11 - c
+      c ='X' if c == 10
+      return c
+    elsif isbn.length <= 13
+      (1..11).step(2) {|i| c += isbn[i].to_i}
+      c *= 3
+      (0..11).step(2) {|i| c += isbn[i].to_i}
+      c = (220-c) % 10
+      return c
+    end
   end
 
 end
