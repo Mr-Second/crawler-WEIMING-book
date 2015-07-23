@@ -2,7 +2,7 @@ require 'crawler_rocks'
 
 require 'json'
 require 'iconv'
-require 'isbn'
+require 'book_toolkit'
 
 require 'pry'
 
@@ -12,7 +12,10 @@ require 'thwait'
 class WeimingBookCrawler
   include CrawlerRocks::DSL
 
-  def initialize
+  def initialize update_progress: nil, after_each: nil
+    @update_progress_proc = update_progress
+    @after_each_proc = after_each
+
     @query_url = "http://www.wmbook.com.tw/index.php"
     # @ic = Iconv.new("utf-8//IGNORE//translit","utf-8")
   end
@@ -76,7 +79,8 @@ class WeimingBookCrawler
             edition: edition,
             year: datas[3] && datas[3].text.to_i,
             url: url,
-            price: price,
+            original_price: price,
+            known_supplier: 'weiming'
           }
         end
         finished_page += 1
@@ -110,17 +114,28 @@ class WeimingBookCrawler
         internal_code = internal_code_row && internal_code_row.match(/(?<=書號[：:]).+/).to_s
 
         isbn_row = rows_data.find{|d| d.match(/ISBN[：:]/)}
+        isbn = nil; invalid_isbn = nil;
         isbn = isbn_row && isbn_row.match(/(?<=ISBN[：:]).+/).to_s
+
+        begin
+          isbn = BookToolkit.to_isbn13(isbn)
+        rescue Exception => e
+          invalid_isbn = isbn
+          isbn = nil
+        end
 
         publisher_row = rows_data.find{|d| d.match(/出版商[：:].+/)}
         publisher = publisher_row && publisher_row.match(/(?<=出版商[：:]).+/).to_s
 
         book[:internal_code] = internal_code
         book[:publisher] = publisher
-        book[:isbn] = isbn && !isbn.empty? && isbn_to_13(isbn)
+        book[:isbn] = isbn
+        book[:invalid_isbn] = invalid_isbn
+
+        @after_each_proc.call(book: book) if @after_each_proc
 
         detail_finish_count += 1
-        print "#{detail_finish_count} / #{books_count}\n"
+        # print "#{detail_finish_count} / #{books_count}\n"
       end # end Thread do
     end
     ThreadsWait.all_waits(*@threads)
@@ -129,45 +144,13 @@ class WeimingBookCrawler
   end
 
   def get_page start_book_id
-      RestClient.get( @query_url + "?" + {
-        "php_mode" => 'booklist',
-        "StartBookId" => start_book_id,
-      }.map{|k, v| "#{k}=#{v}"}.join('&'),
-        cookies: @cookies
-      )
+    RestClient.get( @query_url + "?" + {
+      "php_mode" => 'booklist',
+      "StartBookId" => start_book_id,
+    }.map{|k, v| "#{k}=#{v}"}.join('&'),
+      cookies: @cookies
+    )
   end
-
-  def isbn_to_13 isbn
-    case isbn.length
-    when 13
-      return ISBN.thirteen isbn
-    when 10
-      return ISBN.thirteen isbn
-    when 12
-      return "#{isbn}#{isbn_checksum(isbn)}"
-    when 9
-      return ISBN.thirteen("#{isbn}#{isbn_checksum(isbn)}")
-    end
-  end
-
-  def isbn_checksum(isbn)
-    isbn.gsub!(/[^(\d|X)]/, '')
-    c = 0
-    if isbn.length <= 10
-      10.downto(2) {|i| c += isbn[10-i].to_i * i}
-      c %= 11
-      c = 11 - c
-      c ='X' if c == 10
-      return c
-    elsif isbn.length <= 13
-      (1..11).step(2) {|i| c += isbn[i].to_i}
-      c *= 3
-      (0..11).step(2) {|i| c += isbn[i].to_i}
-      c = (220-c) % 10
-      return c
-    end
-  end
-
 end
 
 class String
@@ -176,5 +159,5 @@ class String
   end
 end
 
-cc = WeimingBookCrawler.new
-File.write('wm_books.json', JSON.pretty_generate(cc.books))
+# cc = WeimingBookCrawler.new
+# File.write('wm_books.json', JSON.pretty_generate(cc.books))

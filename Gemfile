@@ -5,4 +5,5 @@ gem 'crawler_rocks'
 gem 'iconv'
 gem 'pry'
 
-gem 'isbn'
+gem 'book_toolkit'
+gem 'web_task_runner'
